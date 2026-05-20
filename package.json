@@ -1,10 +1,11 @@
 {
-  "name": "superai",
-  "version": "1.0.0",
-  "private": true,
-  "description": "SuperAI Android Application",
-  "scripts": {
-    "dev": "echo 'This is a Kotlin/Android project. Use Gradle to build.'",
-    "build": "echo 'This is a Kotlin/Android project. Use ./gradlew build'"
-  }
+    "name": "superai",
+      "version": "1.0.0",
+        "lockfileVersion": 3,
+          "requires": true,
+            "packages": {
+                "": {
+                      "name": "superai",
+                            "version": "1.0.0"
+                                }
 }
