@@ -3,9 +3,10 @@ package com.superai.app.agent.profile
 import android.os.Parcelable
 import androidx.room.*
 import kotlinx.parcelize.Parcelize
-import kotlinx.coroutines.flow.Flow
+import kotlinx.serialization.Serializable
 import java.util.UUID
 
+@Serializable
 @Parcelize
 @Entity(tableName = "agent_profiles")
 data class AgentProfile(

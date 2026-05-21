@@ -27,10 +27,11 @@ fun AgentDetailScreen(
 ) {
     LaunchedEffect(agentId) { vm.loadProfile(agentId) }
 
-    val profile   by vm.profile.collectAsState()
-    val state     by vm.agentState.collectAsState()
-    val resultLog by vm.resultLog.collectAsState()
-    var input     by remember { mutableStateOf("") }
+    val profile       by vm.profile.collectAsState()
+    val state         by vm.agentState.collectAsState()
+    val resultLog     by vm.resultLog.collectAsState()
+    val reversedLog   = remember(resultLog) { resultLog.reversed() }
+    var input         by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -62,8 +63,8 @@ fun AgentDetailScreen(
                     Spacer(Modifier.width(8.dp))
                     FilledIconButton(
                         onClick = { if (input.isNotBlank()) { vm.submitDirective(input); input = "" } },
-                        enabled = input.isNotBlank() && state is AgentState.Idle ||
-                                  state is AgentState.Completed || state is AgentState.Error
+                        enabled = input.isNotBlank() && (state is AgentState.Idle ||
+                                  state is AgentState.Completed || state is AgentState.Error)
                     ) { Icon(Icons.Filled.Send, "Send") }
                 }
             }
@@ -92,7 +93,7 @@ fun AgentDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     reverseLayout = true
                 ) {
-                    items(resultLog.reversed(), key = { it.id }) { result ->
+                    items(reversedLog, key = { it.id }) { result ->
                         ResultCard(result)
                     }
                 }

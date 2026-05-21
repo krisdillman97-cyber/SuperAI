@@ -1,6 +1,7 @@
 package com.superai.app.ui.dashboard
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -125,8 +126,9 @@ private fun AgentCard(
             else
                 MaterialTheme.colorScheme.surface
         ),
-        border = CardDefaults.outlinedCardBorder().copy(
-            width = if (isActive) 2.dp else 1.dp
+        border = BorderStroke(
+            width = if (isActive) 2.dp else 1.dp,
+            color = borderColor
         )
     ) {
         Row(

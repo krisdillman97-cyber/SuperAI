@@ -6,15 +6,20 @@ import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import com.superai.app.R
 import com.superai.app.SuperAIApplication
+import com.superai.app.agent.core.AgentRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
+import com.google.gson.Gson
 import timber.log.Timber
+import java.io.File
 import javax.inject.Inject
 
 @AndroidEntryPoint
 class DriveSyncService : Service() {
 
     @Inject lateinit var driveRepo: DriveRepository
+    @Inject lateinit var agentRepo: AgentRepository
 
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
@@ -36,9 +41,44 @@ class DriveSyncService : Service() {
         scope.launch {
             try {
                 Timber.d("Drive sync started")
-                // Add sync logic here — e.g. upload agent profiles snapshot
-                delay(500)
-                Timber.d("Drive sync complete")
+                if (!driveRepo.isSignedIn) {
+                    Timber.w("Drive sync skipped — not signed in")
+                    stopSelf()
+                    return@launch
+                }
+
+                // Collect current profiles and serialise to JSON snapshot
+                val profiles = agentRepo.getAllProfiles().first()
+                if (profiles.isEmpty()) {
+                    Timber.d("No agent profiles to sync")
+                    stopSelf()
+                    return@launch
+                }
+
+                val snapshot = profiles.map { p ->
+                    mapOf(
+                        "id"           to p.id,
+                        "name"         to p.name,
+                        "instructions" to p.systemInstructions,
+                        "isActive"     to p.isActive.toString(),
+                        "directives"   to p.totalDirectivesProcessed.toString(),
+                        "updatedAt"    to p.updatedAt.toString()
+                    )
+                }
+                val snapshotJson = Gson().toJson(snapshot)
+
+                // Write snapshot to a temp file then upload
+                val tmpFile = File(cacheDir, "superai_profiles_snapshot.json")
+                tmpFile.writeText(snapshotJson)
+
+                val fileId = driveRepo.uploadFile(tmpFile, "application/json")
+                if (fileId != null) {
+                    Timber.d("Drive sync complete — uploaded snapshot id=$fileId")
+                } else {
+                    Timber.w("Drive sync: upload returned null (may already exist or not signed in)")
+                }
+
+                tmpFile.delete()
             } catch (e: Exception) {
                 Timber.e(e, "Drive sync error")
             } finally {
