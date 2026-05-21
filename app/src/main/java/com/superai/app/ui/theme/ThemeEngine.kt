@@ -1,16 +1,24 @@
 package com.superai.app.ui.theme
 
 import android.content.Context
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
-import androidx.datastore.preferences.core.*
+import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dagger.hilt.android.lifecycle.HiltViewModel
-import dagger.hilt.android.qualifiers.ApplicationContext
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -33,8 +41,9 @@ private object ThemeKeys {
     val FONT_SCALE      = floatPreferencesKey("font_scale")
 }
 
+// NOT @Inject — provided manually by AppModule to avoid Hilt double-binding
 @Singleton
-class ThemeRepository @Inject constructor(@ApplicationContext private val context: Context) {
+class ThemeRepository(private val context: Context) {
 
     val themeConfig: Flow<ThemeConfig> = context.themeDataStore.data.map { p ->
         ThemeConfig(
@@ -65,16 +74,21 @@ class ThemeViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ThemeConfig())
 
     fun updateConfig(c: ThemeConfig) = viewModelScope.launch { repo.saveConfig(c) }
-    fun toggleDark() = viewModelScope.launch { repo.saveConfig(themeConfig.value.copy(isDarkMode = !themeConfig.value.isDarkMode)) }
-    fun setPrimaryColor(argb: Long) = viewModelScope.launch { repo.saveConfig(themeConfig.value.copy(primaryColorArgb = argb)) }
-    fun setCornerRadius(r: Float) = viewModelScope.launch { repo.saveConfig(themeConfig.value.copy(cornerRadius = r)) }
+    fun toggleDark() = viewModelScope.launch {
+        repo.saveConfig(themeConfig.value.copy(isDarkMode = !themeConfig.value.isDarkMode))
+    }
+    fun setPrimaryColor(argb: Long) = viewModelScope.launch {
+        repo.saveConfig(themeConfig.value.copy(primaryColorArgb = argb))
+    }
+    fun setCornerRadius(r: Float) = viewModelScope.launch {
+        repo.saveConfig(themeConfig.value.copy(cornerRadius = r))
+    }
 }
 
 @Composable
 fun SuperAIThemeEngine(config: ThemeConfig, content: @Composable () -> Unit) {
     val primary   = Color(config.primaryColorArgb)
     val secondary = Color(config.secondaryColorArgb)
-
     val colorScheme = if (config.isDarkMode) {
         darkColorScheme(
             primary        = primary,
@@ -90,7 +104,6 @@ fun SuperAIThemeEngine(config: ThemeConfig, content: @Composable () -> Unit) {
     } else {
         lightColorScheme(primary = primary, secondary = secondary)
     }
-
     MaterialTheme(colorScheme = colorScheme, content = content)
 }
 

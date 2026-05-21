@@ -3,165 +3,87 @@ package com.superai.app.agent.state
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
-import timber.log.Timber
-import java.util.LinkedList
-import java.util.UUID
+import javax.inject.Inject
+import javax.inject.Singleton
 
-// ── State sealed class ────────────────────────────────────────────────────────
-sealed class AgentState {
-    object Idle : AgentState()
-    data class Processing(val directive: String, val step: Int = 0) : AgentState()
-    data class Building(val target: String, val progress: Int = 0) : AgentState()
-    data class Executing(val command: String) : AgentState()
-    data class Completed(val result: DirectiveResult) : AgentState()
-    data class Error(val message: String, val recoverable: Boolean = true) : AgentState()
-    object Paused : AgentState()
+enum class AgentState {
+    IDLE, LISTENING, PROCESSING, RESPONDING, ERROR, COMPILING, SUSPENDED
 }
 
-data class DirectiveResult(
-    val id: String = UUID.randomUUID().toString(),
-    val directive: String,
-    val output: String,
-    val success: Boolean,
-    val timestamp: Long = System.currentTimeMillis(),
-    val durationMs: Long = 0L,
-    val artifacts: List<String> = emptyList()
+data class AgentContext(
+    val state: AgentState = AgentState.IDLE,
+    val activeProfileId: String? = null,
+    val lastDirective: String = "",
+    val errorMessage: String? = null,
+    val contextWindow: List<String> = emptyList(),
+    val maxContextTokens: Int = 4096
 )
 
-// ── Sliding-window context buffer ─────────────────────────────────────────────
-data class ContextEntry(
-    val role: String,       // "user" | "agent" | "system" | "result"
-    val content: String,
-    val timestamp: Long = System.currentTimeMillis(),
-    val tokenEstimate: Int = (content.length / 4).coerceAtLeast(1)
-)
+@Singleton
+class AgentStateMachine @Inject constructor() {
 
-class ContextWindowBuffer(
-    private val maxTokens: Int = 131_072,
-    private val pruneToFraction: Float = 0.70f
-) {
-    private val _entries: LinkedList<ContextEntry> = LinkedList()
-    private var _totalTokens: Int = 0
+    private val _context = MutableStateFlow(AgentContext())
+    val context: StateFlow<AgentContext> = _context.asStateFlow()
 
-    val entries: List<ContextEntry> get() = _entries.toList()
-    val totalTokens: Int get() = _totalTokens
-    val size: Int get() = _entries.size
+    private val _windowBuffer = ArrayDeque<String>(MAX_WINDOW)
 
-    fun push(entry: ContextEntry) {
-        _entries.addLast(entry)
-        _totalTokens += entry.tokenEstimate
-        if (_totalTokens > maxTokens) prune()
-    }
-
-    private fun prune() {
-        val target = (maxTokens * pruneToFraction).toInt()
-        while (_totalTokens > target && _entries.isNotEmpty()) {
-            val removed = _entries.removeFirst()
-            _totalTokens -= removed.tokenEstimate
+    fun transition(newState: AgentState, directive: String = "", error: String? = null) {
+        val current = _context.value
+        val allowed = validTransitions[current.state] ?: emptySet()
+        if (newState !in allowed && newState != current.state) {
+            _context.value = current.copy(state = AgentState.ERROR,
+                errorMessage = "Invalid transition ${current.state} → $newState")
+            return
         }
-        Timber.d("Context pruned: ${_entries.size} entries, ~$_totalTokens tokens")
+        _context.value = current.copy(
+            state         = newState,
+            lastDirective = directive.ifBlank { current.lastDirective },
+            errorMessage  = error
+        )
     }
 
-    fun buildContextBlock(systemInstructions: String, safetyLevel: Float): String = buildString {
-        appendLine("=== SYSTEM ===")
-        appendLine(systemInstructions.ifBlank { "General-purpose agent. Process all directives." })
-        appendLine("[SAFETY: $safetyLevel | ${safetyLabel(safetyLevel)}]")
-        appendLine()
-        appendLine("=== CONTEXT (${_entries.size} entries, ~$_totalTokens tokens) ===")
-        _entries.forEach { e -> appendLine("[${e.role.uppercase()}] ${e.content}") }
+    fun pushContext(entry: String) {
+        val tokenEstimate = entry.length / 4
+        pruneWindowIfNeeded(tokenEstimate)
+        _windowBuffer.addLast(entry)
+        _context.value = _context.value.copy(contextWindow = _windowBuffer.toList())
     }
 
-    fun clear() { _entries.clear(); _totalTokens = 0 }
-
-    private fun safetyLabel(v: Float) = when {
-        v < 0.2f -> "UNRESTRICTED"
-        v < 0.4f -> "LOW"
-        v < 0.6f -> "MEDIUM"
-        v < 0.8f -> "HIGH"
-        else     -> "MAXIMUM"
-    }
-}
-
-// ── State machine ─────────────────────────────────────────────────────────────
-class AgentStateMachine(
-    val agentId: String,
-    val systemInstructions: String,
-    initialSafetyLevel: Float = 0.7f
-) {
-    private val _state = MutableStateFlow<AgentState>(AgentState.Idle)
-    val state: StateFlow<AgentState> = _state.asStateFlow()
-
-    private val _resultLog = MutableStateFlow<List<DirectiveResult>>(emptyList())
-    val resultLog: StateFlow<List<DirectiveResult>> = _resultLog.asStateFlow()
-
-    var safetyLevel: Float = initialSafetyLevel
-        private set
-
-    val contextWindow = ContextWindowBuffer()
-
-    private val buildPattern = Regex("""(?i)\b(build|compile|generate|create|make|output)\b.{0,30}?\b(apk|script|project|app|module)\b""")
-    private val adbPattern   = Regex("""(?i)\b(adb|deploy|install|push|sideload)\b""")
-    private val stopPattern  = Regex("""(?i)\b(stop|halt|pause|cancel|abort)\b""")
-
-    fun transition(event: AgentEvent): Boolean {
-        val current = _state.value
-        val next: AgentState? = when (event) {
-            is AgentEvent.SubmitDirective -> when (current) {
-                is AgentState.Idle, is AgentState.Completed, is AgentState.Error -> {
-                    contextWindow.push(ContextEntry("user", event.directive))
-                    when {
-                        buildPattern.containsMatchIn(event.directive) ->
-                            AgentState.Building(target = event.directive)
-                        adbPattern.containsMatchIn(event.directive) ->
-                            AgentState.Executing(command = event.directive)
-                        else ->
-                            AgentState.Processing(directive = event.directive)
-                    }
-                }
-                else -> null
-            }
-            is AgentEvent.Progress -> when (current) {
-                is AgentState.Processing -> current.copy(step = event.value)
-                is AgentState.Building   -> current.copy(progress = event.value)
-                else -> null
-            }
-            is AgentEvent.Complete -> {
-                val result = DirectiveResult(
-                    directive = event.directive,
-                    output    = event.output,
-                    success   = event.success,
-                    durationMs = event.durationMs,
-                    artifacts  = event.artifacts
-                )
-                contextWindow.push(ContextEntry("result", event.output.take(512)))
-                _resultLog.update { it + result }
-                AgentState.Completed(result)
-            }
-            is AgentEvent.Fail -> AgentState.Error(event.message, event.recoverable)
-            is AgentEvent.Stop -> if (stopPattern.containsMatchIn(event.reason)) AgentState.Paused else null
-            is AgentEvent.Reset -> AgentState.Idle
-            is AgentEvent.UpdateSafety -> { safetyLevel = event.level; null }
+    private fun pruneWindowIfNeeded(incomingTokens: Int) {
+        var total = _windowBuffer.sumOf { it.length / 4 } + incomingTokens
+        while (total > _context.value.maxContextTokens && _windowBuffer.isNotEmpty()) {
+            val removed = _windowBuffer.removeFirst()
+            total -= removed.length / 4
         }
-        return if (next != null) { _state.value = next; true } else false
     }
 
-    fun currentContextBlock(): String =
-        contextWindow.buildContextBlock(systemInstructions, safetyLevel)
-}
+    fun clearContext() {
+        _windowBuffer.clear()
+        _context.value = _context.value.copy(contextWindow = emptyList())
+    }
 
-sealed class AgentEvent {
-    data class SubmitDirective(val directive: String) : AgentEvent()
-    data class Progress(val value: Int) : AgentEvent()
-    data class Complete(
-        val directive: String,
-        val output: String,
-        val success: Boolean,
-        val durationMs: Long = 0L,
-        val artifacts: List<String> = emptyList()
-    ) : AgentEvent()
-    data class Fail(val message: String, val recoverable: Boolean = true) : AgentEvent()
-    data class Stop(val reason: String = "") : AgentEvent()
-    object Reset : AgentEvent()
-    data class UpdateSafety(val level: Float) : AgentEvent()
+    fun reset() {
+        _windowBuffer.clear()
+        _context.value = AgentContext(activeProfileId = _context.value.activeProfileId)
+    }
+
+    fun setProfile(id: String) {
+        _context.value = _context.value.copy(activeProfileId = id)
+    }
+
+    fun buildContextString(): String = _windowBuffer.joinToString("\n")
+
+    private val validTransitions = mapOf(
+        AgentState.IDLE        to setOf(AgentState.LISTENING, AgentState.COMPILING, AgentState.SUSPENDED),
+        AgentState.LISTENING   to setOf(AgentState.PROCESSING, AgentState.IDLE, AgentState.ERROR),
+        AgentState.PROCESSING  to setOf(AgentState.RESPONDING, AgentState.COMPILING, AgentState.ERROR, AgentState.IDLE),
+        AgentState.RESPONDING  to setOf(AgentState.IDLE, AgentState.LISTENING, AgentState.ERROR),
+        AgentState.COMPILING   to setOf(AgentState.IDLE, AgentState.ERROR),
+        AgentState.ERROR       to setOf(AgentState.IDLE, AgentState.LISTENING),
+        AgentState.SUSPENDED   to setOf(AgentState.IDLE)
+    )
+
+    companion object {
+        private const val MAX_WINDOW = 100
+    }
 }

@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- Base application theme — Material, no ActionBar, Compose handles theming -->
     <style name="Theme.SuperAI" parent="android:Theme.Material.Light.NoActionBar">
         <item name="android:windowBackground">@color/superai_dark_bg</item>
         <item name="android:statusBarColor">@color/superai_dark_bg</item>
         <item name="android:navigationBarColor">@color/superai_dark_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
     </style>
 </resources>

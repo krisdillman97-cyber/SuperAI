@@ -7,7 +7,11 @@ import androidx.core.app.NotificationCompat
 import com.superai.app.R
 import com.superai.app.SuperAIApplication
 import dagger.hilt.android.AndroidEntryPoint
-import kotlinx.coroutines.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import timber.log.Timber
 import javax.inject.Inject
 
@@ -21,11 +25,7 @@ class DriveSyncService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        when (intent?.action) {
-            ACTION_STOP -> { stopSelf(); return START_NOT_STICKY }
-        }
-        startForeground(
-            NOTIF_ID,
+        startForeground(NOTIF_ID,
             NotificationCompat.Builder(this, SuperAIApplication.CHANNEL_DRIVE)
                 .setContentTitle("SuperAI Drive Sync")
                 .setContentText("Syncing agent data…")
@@ -33,12 +33,14 @@ class DriveSyncService : Service() {
                 .setOngoing(true)
                 .build()
         )
+        val action = intent?.getStringExtra(EXTRA_ACTION) ?: ACTION_SYNC
         scope.launch {
             try {
-                Timber.d("Drive sync started")
-                // Add sync logic here — e.g. upload agent profiles snapshot
-                delay(500)
-                Timber.d("Drive sync complete")
+                when (action) {
+                    ACTION_SYNC   -> driveRepo.syncAll()
+                    ACTION_UPLOAD -> driveRepo.uploadPendingFiles()
+                    ACTION_FETCH  -> driveRepo.fetchLatest()
+                }
             } catch (e: Exception) {
                 Timber.e(e, "Drive sync error")
             } finally {
@@ -48,13 +50,13 @@ class DriveSyncService : Service() {
         return START_NOT_STICKY
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        scope.cancel()
-    }
+    override fun onDestroy() { super.onDestroy(); scope.cancel() }
 
     companion object {
-        const val ACTION_STOP = "com.superai.app.STOP_DRIVE_SYNC"
+        const val EXTRA_ACTION = "extra_action"
+        const val ACTION_SYNC   = "sync"
+        const val ACTION_UPLOAD = "upload"
+        const val ACTION_FETCH  = "fetch"
         private const val NOTIF_ID = 3
     }
 }

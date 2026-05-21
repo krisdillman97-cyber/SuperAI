@@ -7,7 +7,7 @@ import com.superai.app.agent.profile.AgentProfileDao
 
 @Database(
     entities = [AgentProfile::class],
-    version = 1,
+    version  = 2,
     exportSchema = false
 )
 abstract class SuperAIDatabase : RoomDatabase() {
